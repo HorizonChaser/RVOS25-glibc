@@ -4,7 +4,7 @@ author: 侯文轩
 pubDate: 2025-05-14
 categories:
   - 2025 年第一期
-description: 在这里填写简单的描述，如果不想描述，删去这个字段。
+description: 基于 rvv-env 修改了可用于 RISC-V glibc 的调试环境, 尝试向量化优化了 memcpy 并进行了简单的测试
 ---
 # 搭建 RISC-V glibc 的调试环境并尝试使用 RVV 优化 memcpy
 
@@ -15,14 +15,15 @@ description: 在这里填写简单的描述，如果不想描述，删去这个�
 > 3. 对 glibc 中的 `memcpy` 进行了向量化
 > 4. 对向量化之后的 `memcpy` 进行了测试
 
-> 本文的原始文件与代码可从 [GitHub 仓库](https://github.com/HorizonChaser/RVOS25-glibc) 获取.
+> 本文的原始文件与代码可从 [GitHub 仓库](https://github.com/HorizonChaser/RVOS25-glibc) 获取。
+> 修改后的 rvv-env 可从 [另一个 GitHub 仓库](https://github.com/HorizonChaser/rvv-env) 获取。
 
 
 这篇文章尝试使用 [`rvv-env`](https://gitlab.com/riseproject/rvv-env) 作为 RISC-V 下的交叉编译与调试环境，并在其基础上进行自定义，增加必须的工具与符号等，以用来调试 RISC-V glibc。
 
 ## `rvv-env` 环境搭建
 
-[`rvv-env`](https://gitlab.com/riseproject/rvv-env) 提供了容器化的 RISC-V 编译与调试环境，使用 `qemu-user` 在一个容器中（称作 `target`）进行模拟，并在另一个容器（称作 `host`）中通过 GDB 进行远程调试。我对该项目进行了一些修改，在正确放置所有文件后，拉取镜像后应当可以直接调试 glibc.
+[原始版本的 `rvv-env`](https://gitlab.com/riseproject/rvv-env) 提供了容器化的 RISC-V 编译与调试环境，使用 `qemu-user` 在一个容器中（称作 `target`）进行模拟，并在另一个容器（称作 `host`）中通过 GDB 进行远程调试。我对该项目进行了一些修改，**在正确放置所有文件后**，拉取镜像后应当可以直接调试 glibc.
 
 ### 常规的使用方法及存在的问题
 
@@ -58,8 +59,10 @@ libc6-dev/now 2.39-0ubuntu8.4 riscv64 [installed,local]
 libc6-riscv64-cross/now 2.39-0ubuntu8cross1 all [installed,local]
 libc6/now 2.39-0ubuntu8.4 riscv64 [installed,local]
 ```
- 
-所需的包可以从 [https://packages.ubuntu.com](https://packages.ubuntu.com) 搜索，点击对应架构的文件列表可以看到包安装后的各个文件的位置。[下载 `libc6-dbg`](https://code.launchpad.net/ubuntu/noble/riscv64/libc6-dbg/2.39-0ubuntu8) 后，将其中的 `usr/` 提取出，放置在 `rvv-env/work/` 下。[`下载 glibc 源码`](http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/glibc_2.39.orig.tar.xz) 后，将 `glibc-2.39/` 同样放置在`rvv-env/work/` 下。[`下载 pwndbg portable`](https://github.com/pwndbg/pwndbg/releases/download/2025.04.18/pwndbg_2025.04.18_riscv64-portable.tar.xz) 后，将 `pwndbg/` 同样放置在`rvv-env/work/` 下。此时你的 `rvv-env/work/` 看起来应该是这样的：
+
+首先，从 [我的 GitHub 仓库](https://github.com/HorizonChaser/rvv-env) 获取修改后的 `rvv-env`.
+
+之后，所需的包可以从 [https://packages.ubuntu.com](https://packages.ubuntu.com) 搜索，点击对应架构的文件列表可以看到包安装后的各个文件的位置。[下载 `libc6-dbg`](https://code.launchpad.net/ubuntu/noble/riscv64/libc6-dbg/2.39-0ubuntu8) 后，将其中的 `usr/` 提取出，放置在 `rvv-env/work/` 下。[下载 `glibc 源码`](http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/glibc_2.39.orig.tar.xz) 后，将 `glibc-2.39/` 同样放置在`rvv-env/work/` 下。[下载 `pwndbg portable`](https://github.com/pwndbg/pwndbg/releases/download/2025.04.18/pwndbg_2025.04.18_riscv64-portable.tar.xz) 后，将 `pwndbg/` 同样放置在`rvv-env/work/` 下。此时你的 `rvv-env/work/` 看起来应该是这样的：
 
 ```bash
 (py) horizon@horizon-VMware20-1:~/project/rvv-env$ tree -L 2 work
@@ -122,11 +125,11 @@ work
 
 ## 向量化 `memcpy`
 
-> 在完成了之后，才发现于佳耕老师在 25 年 1 月份 [提交了 `memcpy` 的向量化补丁](https://gcc.gnu.org/pipermail/libc-alpha/2025-January/164045.html), 不过 `glibc 2.41.0` 并未包含了向量化的 `memcpy`, 而是增加了支持快速未对齐访问的版本...
+> 在完成了之后，才发现戴成荣老师在 25 年 1 月份 [提交了 `memcpy` 的向量化补丁](https://gcc.gnu.org/pipermail/libc-alpha/2025-January/164045.html), 不过 `glibc 2.41.0` 并未包含了向量化的 `memcpy`, 而是增加了支持快速未对齐访问的版本...
 
 ### 对常规版本的 `memcpy`的分析
 
-常规版本的 `memcpy`(`glibc-2.39/string/memcpy.c`) 其实原理比较简单，代码如下：
+常规版本的 `memcpy`(`glibc-2.39/string/memcpy.c`) 实现原理比较简单，代码如下：
 
 ```c
 void *
@@ -314,9 +317,9 @@ void* memcpy_rvv_internal(void* dst, const void* src, size_t len) {
 
 ### 下一步的计划
 
-下一部的计划继续围绕 glibc 及其 `IFUNC` 机制展开。`IFUNC` 机制提供了根据运行时平台的硬件特性选择合适版本的库函数执行的能力，在当前的场景下，可以实现同一份 glibc 二进制在硬件支持 RVV 时使用向量化版本，不支持时回退到标量版本的能力。
+下一步的计划继续围绕 glibc 及其 `IFUNC` 机制展开。由于时间所限，本次优化并未使用 `IFUNC` 机制并构建完整的 `glibc` 进行测试。`IFUNC` 机制提供了根据运行时平台的硬件特性选择合适版本的库函数执行的能力，在当前的场景下，可以实现同一份 glibc 二进制在硬件支持 RVV 时使用向量化版本，不支持时回退到标量版本的能力。
 
-1. 继续阅读 RVV Spec 与 IFUNC 相关的文档，了解其用法
+1. 继续阅读 RVV Spec 与 `IFUNC` 相关的文档，了解其用法
 2. 阅读 glibc 源码，了解代码结构
-3. 为 `memcpy` 添加 IFUNC 支持
+3. 为 `memcpy` 添加 `IFUNC` 支持
 4. 继续尝试优化其他 glibc 库函数
